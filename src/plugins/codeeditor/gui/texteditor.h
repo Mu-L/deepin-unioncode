@@ -66,15 +66,19 @@ public:
     void gotoPosition(int pos);
     int cursorLastPosition();
     int cursorPosition();
-    void setLineBackgroundColor(int line, const QColor &color);
-    void resetLineBackgroundColor(int line);
-    void clearLineBackgroundColor();
+    int backgroundMarkerDefine(const QColor &color, int defaultMarker);
+    void setRangeBackgroundColor(int startLine, int endLine, int marker);
+    void getBackgroundRange(int marker, int *startLine, int *endLine);
+    void clearAllBackgroundColor(int marker);
     void showTips(const QString &tips);
     void showTips(int pos, const QString &tips);
+    void showTips(int pos, QWidget *w);
     void cancelTips();
     void addAnnotation(const QString &title, const QString &content, int line, int type);
     void addAnnotation(const QString &content, int line, int type);
     void removeAnnotation(const QString &title);
+    void addEOLAnnotation(const QString &title, const QString &content, int line, int type);
+    void removeEOLAnnotation(const QString &title);
     void commentOperation();
     QString getFileType();
     QStringList getFileCommentSettings(const QMap<QString, QVariant> &commentSettings);
@@ -96,13 +100,17 @@ public:
     void followSymbolUnderCursor();
     void findUsage();
     void renameSymbol();
-    void setCompletion(const QString &info, const QIcon &icon, const QKeySequence &key);
+    void setCompletion(const QString &info);
+    void applyCompletion();
+    void cancelCompletion();
 
     QString cursorBeforeText() const;
     QString cursorBehindText() const;
 
     void setAutomaticInvocationEnabled(bool enabled);
     bool isAutomaticInvocationEnabled() const;
+    bool showLineWidget(int line, QWidget *widget);
+    void closeLineWidget();
 
 public slots:
     void onMarginClicked(int margin, int line, Qt::KeyboardModifiers state);
@@ -114,6 +122,9 @@ protected:
     virtual void focusOutEvent(QFocusEvent *event) override;
     virtual void keyPressEvent(QKeyEvent *event) override;
     virtual void mouseMoveEvent(QMouseEvent *event) override;
+    virtual void mousePressEvent(QMouseEvent *event) override;
+    virtual void mouseReleaseEvent(QMouseEvent *event) override;
+    virtual bool eventFilter(QObject *obj, QEvent *event) override;
     virtual bool event(QEvent *event) override;
 
 signals:

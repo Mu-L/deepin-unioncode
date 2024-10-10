@@ -12,6 +12,8 @@
 
 #include <Qsci/qscistyle.h>
 
+#include <DFloatingWidget>
+
 class TextEditorPrivate : public QObject
 {
     Q_OBJECT
@@ -28,8 +30,13 @@ public:
         BreakpointDisabled,
         Bookmark,
         Runtime,
-        RuntimeLineBackground,
-        CustomLineBackground
+        RuntimeLineBackground
+    };
+
+    struct MarkerRange
+    {
+        int startLine = -1;
+        int endLine = -1;
     };
 
     explicit TextEditorPrivate(TextEditor *qq);
@@ -37,6 +44,7 @@ public:
     void init();
     void initConnection();
     void initMargins();
+    void initWidgetContainer();
     void updateColorTheme();
     void loadLexer();
     void initLanguageClient();
@@ -56,6 +64,11 @@ public:
     QMap<int, int> allMarkers();
     void setMarkers(const QMap<int, int> &maskMap);
 
+    QWidget *mainWindow();
+    void setContainerWidget(QWidget *widget);
+    void updateLineWidgetPosition();
+    void updateCacheInfo(int pos, int added);
+
 public slots:
     void resetThemeColor();
     void onDwellStart(int position, int x, int y);
@@ -63,6 +76,7 @@ public slots:
     void onModified(int pos, int mtype, const QString &text, int len, int added,
                     int line, int foldNow, int foldPrev, int token, int annotationLinesAdded);
     void updateSettings();
+    void onSelectionChanged();
 
 public:
     TextEditor *q { nullptr };
@@ -71,7 +85,8 @@ public:
     int preFirstLineNum { 0 };
     int lastCursorPos { 0 };
     QMultiHash<QString, int> annotationRecords;
-    
+    QMultiHash<QString, int> eOLAnnotationRecords;
+
     LanguageClientHandler *languageClient { nullptr };
     bool isAutoCompletionEnabled { false };
 
@@ -82,9 +97,16 @@ public:
     QString fontName;
     int fontSize { 10 };
 
+    using CompletionCache = QPair<int, QString>;
+    CompletionCache cpCache { -1, "" };
     CodeCompletionWidget *completionWidget { nullptr };
-    
     QMap<QString, QVariant> commentSettings;
+
+    QTimer selectionChangeTimer;
+    DTK_WIDGET_NAMESPACE::DFloatingWidget *lineWidgetContainer { nullptr };
+    int showAtLine { 0 };
+    bool leftButtonPressed { false };
+    QMap<int, MarkerRange> markerCache;
 };
 
 #endif   // TEXTEDITOR_P_H

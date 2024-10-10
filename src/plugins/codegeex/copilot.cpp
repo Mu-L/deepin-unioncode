@@ -2,18 +2,21 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "copilot.h"
+#include "widgets/inlinechatwidget.h"
 #include "services/editor/editorservice.h"
 #include "services/option/optionmanager.h"
 #include "services/window/windowservice.h"
 #include "services/project/projectservice.h"
+#include "common/actionmanager/actionmanager.h"
 
 #include <QMenu>
 #include <QDebug>
 #include <QTimer>
 
-static const char *kUrlSSEChat = "https://api.codegeex.cn:8443/tx/v3/chat/message";
-static const char *kUrlGenerateMultiLine = "https://api.codegeex.cn:8443/tx/v3/completions/inline?stream=false";
+static const char *kUrlSSEChat = "https://codegeex.cn/prod/code/chatCodeSseV3/chat";
+static const char *kUrlGenerateMultiLine = "https://api.codegeex.cn:8443/v3/completions/inline?stream=false";
 
+static const char *lineChatTip = "LineChatTip";
 static const char *commandFixBug = "fixbug";
 static const char *commandExplain = "explain";
 static const char *commandReview = "review";
@@ -22,6 +25,7 @@ static const char *commandCommits = "commit_message";
 
 using namespace CodeGeeX;
 using namespace dpfservice;
+
 Copilot::Copilot(QObject *parent)
     : QObject(parent)
 {
@@ -29,6 +33,13 @@ Copilot::Copilot(QObject *parent)
     if (!editorService) {
         qFatal("Editor service is null!");
     }
+    generateTimer = new QTimer(this);
+    generateTimer->setSingleShot(true);
+
+    QAction *lineChatAct = new QAction(tr("Inline Chat"), this);
+    lineChatCmd = ActionManager::instance()->registerAction(lineChatAct, "CodeGeeX.InlineChat");
+    lineChatCmd->setDefaultKeySequence(Qt::CTRL + Qt::Key_T);
+    connect(lineChatAct, &QAction::triggered, this, &Copilot::startInlineChat);
 
     connect(&copilotApi, &CopilotApi::response, [this](CopilotApi::ResponseType responseType, const QString &response, const QString &dstLang) {
         switch (responseType) {
@@ -36,12 +47,24 @@ Copilot::Copilot(QObject *parent)
             replaceSelectedText(response);
             break;
         case CopilotApi::inline_completions:
-            mutexResponse.lock();
-            generateResponse = response;
-            if (editorService->setCompletion && responseValid(response)) {
-                editorService->setCompletion(generateResponse, QIcon::fromTheme("codegeex_anwser_icon"), QKeySequence(Qt::CTRL | Qt::Key_T));
+            if (!responseValid(response))
+                return;
+            {
+                QString completion = "";
+
+                if (generateType == CopilotApi::Line) {
+                    generateCache = response.split('\n');
+                    completion = extractSingleLine();
+                } else if (generateType == CopilotApi::Block) {
+                    generateCache.clear();
+                    completion = response;
+                }
+
+                if (editorService->setCompletion) {
+                    editorService->setCompletion(completion);
+                    generatedCode = completion;
+                }
             }
-            mutexResponse.unlock();
             break;
         case CopilotApi::multilingual_code_translate:
             emit translatedResult(response, dstLang);
@@ -52,6 +75,7 @@ Copilot::Copilot(QObject *parent)
 
     connect(&copilotApi, &CopilotApi::responseByStream, this, &Copilot::response);
     connect(&copilotApi, &CopilotApi::messageSended, this, &Copilot::messageSended);
+    connect(generateTimer, &QTimer::timeout, this, &Copilot::generateCode);
 }
 
 QString Copilot::selectedText() const
@@ -131,7 +155,14 @@ void Copilot::insterText(const QString &text)
 
 void Copilot::setGenerateCodeEnabled(bool enabled)
 {
+    if (!enabled && generateTimer->isActive())
+        generateTimer->stop();
     generateCodeEnabled = enabled;
+}
+
+bool Copilot::getGenerateCodeEnabled() const
+{
+    return generateCodeEnabled;
 }
 
 void Copilot::setLocale(const QString &locale)
@@ -151,9 +182,30 @@ void Copilot::setCurrentModel(CodeGeeX::languageModel model)
 
 void Copilot::handleTextChanged()
 {
-    // start generate code.
+    if (!generateCodeEnabled)
+        return;
+
+    editorService->setCompletion("");
     QMetaObject::invokeMethod(this, [this]() {
-        generateCode();
+        generateTimer->start(500);
+    });
+}
+
+void Copilot::handleSelectionChanged(const QString &fileName, int lineFrom, int indexFrom, int lineTo, int indexTo)
+{
+    QMetaObject::invokeMethod(this, [=] {
+        if (!CodeGeeXManager::instance()->isLoggedIn())
+            return;
+
+        editorService->clearAllEOLAnnotation(lineChatTip);
+        if (lineFrom == -1)
+            return;
+
+        Edit::Position pos = editorService->cursorPosition();
+        if (pos.line < 0)
+            return;
+
+        showLineChatTip(fileName, pos.line);
     });
 }
 
@@ -170,12 +222,21 @@ void Copilot::generateCode()
     if (!generateCodeEnabled)
         return;
 
-    QString prompt = editorService->getCursorBeforeText();
+    QString prefix = editorService->getCursorBeforeText();
     QString suffix = editorService->getCursorBehindText();
-
-    copilotApi.postGenerate(kUrlGenerateMultiLine,
-                            prompt,
-                            suffix);
+    if (!prefix.endsWith(generatedCode) || generateCache.isEmpty()) {
+        generateType = checkPrefixType(prefix);
+        copilotApi.postGenerate(kUrlGenerateMultiLine,
+                                prefix,
+                                suffix,
+                                generateType);
+    } else {
+        QString completion = extractSingleLine();
+        if (editorService->setCompletion) {
+            editorService->setCompletion(completion);
+            generatedCode = completion;
+        }
+    }
 }
 
 void Copilot::login()
@@ -264,4 +325,80 @@ QString Copilot::assembleCodeByCurrentFile(const QString &code)
     QString result;
     result = "```" + fileType + "\n" + code + "```";
     return result;
+}
+
+void Copilot::showLineChatTip(const QString &fileName, int line)
+{
+    auto keySequences = lineChatCmd->keySequences();
+    QStringList keyList;
+    for (const auto &key : keySequences) {
+        if (key.isEmpty())
+            continue;
+        keyList << key.toString();
+    }
+
+    if (!keyList.isEmpty()) {
+        QString msg = InlineChatWidget::tr("  Press %1 to inline chat").arg(keyList.join(','));
+        editorService->eOLAnnotate(fileName, lineChatTip, msg, line, Edit::TipAnnotation);
+    }
+}
+
+void Copilot::startInlineChat()
+{
+    if (!CodeGeeXManager::instance()->isLoggedIn())
+        return;
+
+    editorService->clearAllEOLAnnotation(lineChatTip);
+    if (!inlineChatWidget) {
+        inlineChatWidget = new InlineChatWidget;
+        connect(inlineChatWidget, &InlineChatWidget::destroyed, this, [this] { inlineChatWidget = nullptr; });
+    }
+
+    inlineChatWidget->start();
+}
+
+CodeGeeX::CopilotApi::GenerateType Copilot::checkPrefixType(const QString &prefixCode)
+{
+    //todo
+    Q_UNUSED(prefixCode)
+    if (0)
+        return CopilotApi::Line;
+    else
+        return CopilotApi::Block;
+}
+
+QString Copilot::extractSingleLine()
+{
+    if (generateCache.isEmpty())
+        return "";
+
+    bool extractedCode = false;
+    QString completion = "";
+    for (auto line : generateCache) {
+        if (extractedCode)
+            break;
+        if (line != "")
+            extractedCode = true;
+
+        completion += line == "" ? "\n" : line;
+        generateCache.removeFirst();
+    }
+    completion += "\n";
+
+    //check if left cache all '\n'
+    bool leftAllEmpty = true;
+    for (auto line : generateCache) {
+        if (line == "")
+            continue;
+        leftAllEmpty = false;
+        break;
+    }
+    if (leftAllEmpty) {
+        generateCache.clear();
+        completion += "\n";
+    }
+
+    if (!extractedCode)
+        completion = "";
+    return completion;
 }

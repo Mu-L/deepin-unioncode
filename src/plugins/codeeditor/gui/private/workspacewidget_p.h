@@ -11,6 +11,7 @@
 #include "base/abstracteditwidget.h"
 #include "common/util/eventdefinitions.h"
 #include "services/window/windowservice.h"
+#include "Qsci/qscicommand.h"
 
 #include <QStackedWidget>
 
@@ -71,6 +72,7 @@ public:
     QList<TabWidget *> tabWidgetList;
     QStackedWidget *stackWidget { nullptr };
     QMap<QString, AbstractEditWidget *> registeredWidget;
+    QMap<QString, WorkspaceWidget::RepairCallback> repairToolInfo;
 
     QStringList autoReloadList;
     QStringList modifiedFileList;

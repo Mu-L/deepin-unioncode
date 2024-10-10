@@ -8,6 +8,7 @@
 #include "base/abstractwidget.h"
 #include "services/window/windowservice.h"
 #include "services/project/projectservice.h"
+#include "services/editor/editorservice.h"
 #include "reportpane.h"
 
 #include <QtConcurrent>
@@ -84,14 +85,13 @@ void CodePortingManager::slotSelectedChanged(const QString &filePath, const QStr
 {
     Q_UNUSED(endLine)
 
-    int startLineInEditor = startLine + kLineNumberAdaptation;
-    int endLineInEditor = endLine + kLineNumberAdaptation;
-    editor.gotoLine(filePath, startLineInEditor);
-    editor.addAnnotation(filePath, QString("CodePorting"), suggestion, startLine, AnnotationType::NoteAnnotation);
-    QColor backgroundColor(Qt::red);
-    backgroundColor.setAlpha(100);
-    for (int lineNumber = startLineInEditor; lineNumber <= endLineInEditor; ++lineNumber) {
-        editor.setLineBackgroundColor(filePath, lineNumber, backgroundColor);
+    editor.gotoLine(filePath, startLine);
+    if (auto editSrv = dpfGetService(EditorService)) {
+        editSrv->annotate(filePath, QString("CodePorting"), suggestion, startLine, Edit::NoteAnnotation);
+        QColor backgroundColor(Qt::red);
+        backgroundColor.setAlpha(100);
+        int marker = editSrv->backgroundMarkerDefine(filePath, backgroundColor, -1);
+        editSrv->setRangeBackgroundColor(filePath, startLine, endLine, marker);
     }
 }
 
@@ -100,7 +100,7 @@ void CodePortingManager::slotAppendOutput(const QString &content, OutputPane::Ou
     if (outputPane) {
         QString newContent = content;
         if (OutputPane::OutputFormat::NormalMessage == format
-                || OutputPane::OutputFormat::ErrorMessage == format) {
+            || OutputPane::OutputFormat::ErrorMessage == format) {
             QDateTime curDatetime = QDateTime::currentDateTime();
             QString time = curDatetime.toString("hh:mm:ss");
             newContent = time + ": " + newContent;

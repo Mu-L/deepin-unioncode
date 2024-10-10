@@ -142,12 +142,6 @@ void TabWidgetPrivate::initConnection()
     connect(tabBar, &TabBar::closeRequested, q, &TabWidget::closeRequested);
     connect(tabBar, &TabBar::saveFileRequested, q, &TabWidget::saveFile);
 
-    connect(EditorCallProxy::instance(), &EditorCallProxy::reqAddAnnotation, this, &TabWidgetPrivate::handleAddAnnotation);
-    connect(EditorCallProxy::instance(), &EditorCallProxy::reqRemoveAnnotation, this, &TabWidgetPrivate::handleRemoveAnnotation);
-    connect(EditorCallProxy::instance(), &EditorCallProxy::reqClearAllAnnotation, this, &TabWidgetPrivate::handleClearAllAnnotation);
-    connect(EditorCallProxy::instance(), &EditorCallProxy::reqSetLineBackgroundColor, this, &TabWidgetPrivate::handleSetLineBackgroundColor);
-    connect(EditorCallProxy::instance(), &EditorCallProxy::reqResetLineBackground, this, &TabWidgetPrivate::handleResetLineBackground);
-    connect(EditorCallProxy::instance(), &EditorCallProxy::reqClearLineBackground, this, &TabWidgetPrivate::handleClearLineBackground);
     connect(EditorCallProxy::instance(), &EditorCallProxy::reqDoRename, this, &TabWidgetPrivate::handleDoRename);
 }
 
@@ -200,7 +194,11 @@ QWidget *TabWidgetPrivate::createSpaceWidget()
 
         int row = gridLayout->rowCount();
         gridLayout->addWidget(new QLabel(cmd->action()->text(), q), row, 0, Qt::AlignRight);
-        gridLayout->addWidget(new KeyLabel(cmd->keySequence().toString(), q), row, 1, Qt::AlignLeft);
+        const auto &keyList = cmd->keySequences();
+        for (int i = 0; i < keyList.size(); ++i) {
+            auto key = keyList[i];
+            gridLayout->addWidget(new KeyLabel(key.toString(), q), row, i + 1, Qt::AlignLeft);
+        }
     };
 
     addCommandLine(A_OPEN_FILE);
@@ -417,42 +415,6 @@ void TabWidgetPrivate::onCursorRecordChanged(int pos)
         prePosRecord.takeFirst();
 }
 
-void TabWidgetPrivate::handleAddAnnotation(const QString &fileName, const QString &title, const QString &content, int line, AnnotationType type)
-{
-    if (auto editor = findEditor(fileName))
-        editor->addAnnotation(title, content, line, type);
-}
-
-void TabWidgetPrivate::handleRemoveAnnotation(const QString &fileName, const QString &title)
-{
-    if (auto editor = findEditor(fileName))
-        editor->removeAnnotation(title);
-}
-
-void TabWidgetPrivate::handleClearAllAnnotation(const QString &title)
-{
-    for (auto editor : editorMng)
-        editor->removeAnnotation(title);
-}
-
-void TabWidgetPrivate::handleSetLineBackgroundColor(const QString &fileName, int line, const QColor &color)
-{
-    if (auto editor = findEditor(fileName))
-        editor->setLineBackgroundColor(line, color);
-}
-
-void TabWidgetPrivate::handleResetLineBackground(const QString &fileName, int line)
-{
-    if (auto editor = findEditor(fileName))
-        editor->resetLineBackgroundColor(line);
-}
-
-void TabWidgetPrivate::handleClearLineBackground(const QString &fileName)
-{
-    if (auto editor = findEditor(fileName))
-        editor->clearLineBackgroundColor();
-}
-
 void TabWidgetPrivate::handleDoRename(const newlsp::WorkspaceEdit &info)
 {
     if (info.changes) {
@@ -578,6 +540,38 @@ QStringList TabWidget::openedFiles() const
     return files;
 }
 
+QString TabWidget::rangeText(const QString &fileName, const dpfservice::Edit::Range &range, bool &found)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        found = true;
+        int startPos = editor->positionFromLineIndex(range.start.line,
+                                                     range.start.column == -1
+                                                             ? 0
+                                                             : range.start.column);
+        int endPos = range.end.column == -1
+                ? editor->SendScintilla(TextEditor::SCI_GETLINEENDPOSITION, range.end.line)
+                : editor->positionFromLineIndex(range.end.line, range.end.column);
+        return editor->text(startPos, endPos);
+    }
+
+    found = false;
+    return {};
+}
+
+Edit::Range TabWidget::selectionRange(const QString &fileName, bool &found)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        found = true;
+        Edit::Range range;
+        editor->getSelection(&range.start.line, &range.start.column,
+                             &range.end.line, &range.end.column);
+        return range;
+    }
+
+    found = false;
+    return {};
+}
+
 void TabWidget::setText(const QString &text)
 {
     if (auto editor = d->currentTextEditor()) {
@@ -605,10 +599,24 @@ void TabWidget::replaceAll(const QString &fileName, const QString &oldText,
         d->docFind->replaceAll(editor, oldText, newText, caseSensitive, wholeWords);
 }
 
-void TabWidget::replaceRange(const QString &fileName, int line, int index, int length, const QString &after)
+void TabWidget::replaceText(const QString &fileName, int line, int index, int length, const QString &after)
 {
     if (auto editor = d->findEditor(fileName))
         editor->replaceRange(line, index, line, index + length, after);
+}
+
+bool TabWidget::replaceRange(const QString &fileName, const dpfservice::Edit::Range &range, const QString &newText)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->replaceRange(range.start.line, range.start.column == -1 ? 0 : range.start.column, range.end.line,
+                             range.end.column == -1
+                                     ? editor->lineLength(range.end.line)
+                                     : range.end.column,
+                             newText);
+        return true;
+    }
+
+    return false;
 }
 
 void TabWidget::saveAll() const
@@ -716,10 +724,10 @@ void TabWidget::undo()
         editor->undo();
 }
 
-void TabWidget::setCompletion(const QString &info, const QIcon &icon, const QKeySequence &key)
+void TabWidget::setCompletion(const QString &info)
 {
     if (auto editor = d->currentTextEditor())
-        editor->setCompletion(info, icon, key);
+        editor->setCompletion(info);
 }
 
 void TabWidget::gotoNextPosition()
@@ -769,6 +777,66 @@ void TabWidget::gotoPreviousPosition()
     d->curPosRecord = record;
     d->tabBar->switchTab(record.fileName);
     editor->gotoPosition(record.pos);
+}
+
+QString TabWidget::lineText(const QString &fileName, int line)
+{
+    if (auto editor = d->findEditor(fileName))
+        return editor->text(line);
+
+    return "";
+}
+
+bool TabWidget::eOLAnnotate(const QString &fileName, const QString &title, const QString &contents, int line, int type)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->addEOLAnnotation(title, contents, line, type);
+        return true;
+    }
+
+    return false;
+}
+
+bool TabWidget::clearEOLAnnotation(const QString &fileName, const QString &title)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->removeEOLAnnotation(title);
+        return true;
+    }
+
+    return false;
+}
+
+void TabWidget::clearAllEOLAnnotation(const QString &title)
+{
+    for (auto editor : d->editorMng.values())
+        editor->removeEOLAnnotation(title);
+}
+
+bool TabWidget::annotate(const QString &fileName, const QString &title, const QString &contents, int line, int type)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->addAnnotation(title, contents, line, type);
+        return true;
+    }
+
+    return false;
+}
+
+bool TabWidget::clearAnnotation(const QString &fileName, const QString &title)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->removeAnnotation(title);
+        return true;
+    }
+
+    return false;
+}
+
+void TabWidget::clearAllAnnotation(const QString &title)
+{
+    for (auto editor : d->editorMng.values())
+        editor->removeAnnotation(title);
 }
 
 void TabWidget::setEditorCursorPosition(int pos)
@@ -857,7 +925,69 @@ void TabWidget::updateZoomValue(int value)
     }
 }
 
-QWidget *TabWidget::currentWidget() const
+int TabWidget::backgroundMarkerDefine(const QString &fileName, const QColor &color, int defaultMarker)
+{
+    if (auto editor = d->findEditor(fileName))
+        return editor->backgroundMarkerDefine(color, defaultMarker);
+
+    return -1;
+}
+
+bool TabWidget::setRangeBackgroundColor(const QString &fileName, int startLine, int endLine, int marker)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->setRangeBackgroundColor(startLine, endLine, marker);
+        return true;
+    }
+
+    return false;
+}
+
+Edit::Range TabWidget::getBackgroundRange(const QString &fileName, int marker, bool &found)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        found = true;
+        Edit::Range range;
+        editor->getBackgroundRange(marker, &range.start.line, &range.end.line);
+        return range;
+    }
+
+    found = false;
+    return {};
+}
+
+bool TabWidget::clearAllBackground(const QString &fileName, int marker)
+{
+    if (auto editor = d->findEditor(fileName)) {
+        editor->clearAllBackgroundColor(marker);
+        return true;
+    }
+
+    return false;
+}
+
+void TabWidget::showLineWidget(int line, QWidget *widget)
+{
+    if (auto editor = d->currentTextEditor())
+        editor->showLineWidget(line, widget);
+}
+
+void TabWidget::closeLineWidget()
+{
+    if (auto editor = d->currentTextEditor())
+        editor->closeLineWidget();
+}
+
+void TabWidget::cursorPosition(int *line, int *index)
+{
+    if (!line || !index)
+        return;
+
+    if (auto editor = d->currentTextEditor())
+        editor->getCursorPosition(line, index);
+}
+
+TextEditor *TabWidget::currentEditor() const
 {
     return d->currentTextEditor();
 }

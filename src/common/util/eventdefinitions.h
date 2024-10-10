@@ -49,15 +49,8 @@ OPI_OBJECT(editor,
            OPI_INTERFACE(gotoLine, "fileName", "line")
            OPI_INTERFACE(gotoPosition, "fileName", "line", "column")
 
-           // (AnnotationType)type
-           OPI_INTERFACE(addAnnotation, "fileName", "title", "content", "line", "type")
-           OPI_INTERFACE(removeAnnotation, "fileName", "title")
-           OPI_INTERFACE(clearAllAnnotation, "title")
            OPI_INTERFACE(setDebugLine, "fileName", "line")
            OPI_INTERFACE(removeDebugLine)
-           OPI_INTERFACE(setLineBackgroundColor, "fileName", "line", "color")
-           OPI_INTERFACE(resetLineBackgroundColor, "fileName", "line")
-           OPI_INTERFACE(clearLineBackgroundColor, "fileName")
            OPI_INTERFACE(setModifiedAutoReload, "fileName", "flag")
            OPI_INTERFACE(addBreakpoint, "fileName", "line", "enabled")
            OPI_INTERFACE(removeBreakpoint, "fileName", "line")
@@ -74,6 +67,7 @@ OPI_OBJECT(editor,
            OPI_INTERFACE(breakpointStatusChanged, "fileName", "line", "enabled")
            OPI_INTERFACE(textChanged)
            OPI_INTERFACE(cursorPositionChanged, "fileName", "line", "index")
+           OPI_INTERFACE(selectionChanged, "fileName", "lineFrom", "indexFrom", "lineTo", "indexTo")
 
            //right-cliked menu,  Related to debugging
            OPI_INTERFACE(setBreakpointCondition, "fileName", "line")
@@ -156,14 +150,6 @@ enum RepalceType{
     RepalceAll
 };
 Q_DECLARE_METATYPE(RepalceType);
-
-enum AnnotationType {
-    NoteAnnotation,
-    WarningAnnotation,
-    ErrorAnnotation,
-    FatalAnnotation
-};
-Q_DECLARE_METATYPE(AnnotationType);
 
 extern const QString T_MENU;
 extern const QString T_FILEBROWSER;

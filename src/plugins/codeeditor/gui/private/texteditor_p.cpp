@@ -11,13 +11,13 @@
 #include "gui/settings/editorsettings.h"
 #include "gui/settings/settingsdefine.h"
 #include "services/option/optionutils.h"
+#include "services/editor/editor_define.h"
 #include "services/debugger/debuggerservice.h"
 
 #include <Qsci/qsciapis.h>
 
 #include <DGuiApplicationHelper>
 
-#include <QToolTip>
 #include <QScrollBar>
 #include <QMenu>
 #include <QDebug>
@@ -30,7 +30,7 @@ static constexpr int MARGIN_SYMBOLE_DEFAULT_WIDTH = 14;
 static constexpr int MARGIN_FOLDER_DEFAULT_WIDTH = 14;
 static constexpr int MARGIN_CHANGEBAR_DEFAULT_WIDTH = 3;
 
-static constexpr int TAB_DEFAULT_WIDTH = 4;
+static constexpr int TIP_ANNOTATION_STYLE = 768;
 static constexpr int NOTE_ANNOTATION_STYLE = 767;
 static constexpr int WARNING_ANNOTATION_STYLE = 766;
 static constexpr int ERROR_ANNOTATION_STYLE = 765;
@@ -54,7 +54,10 @@ void TextEditorPrivate::init()
     q->setAnnotationDisplay(TextEditor::AnnotationStandard);
     q->SendScintilla(TextEditor::SCI_AUTOCSETCASEINSENSITIVEBEHAVIOUR,
                      TextEditor::SC_CASEINSENSITIVEBEHAVIOUR_IGNORECASE);
+    selectionChangeTimer.setSingleShot(true);
+    selectionChangeTimer.setInterval(50);
 
+    initWidgetContainer();
     initMargins();
     updateColorTheme();
     updateSettings();
@@ -69,10 +72,13 @@ void TextEditorPrivate::initConnection()
             q->cancelTips();
     });
 
+    connect(q->verticalScrollBar(), &QScrollBar::valueChanged, this, &TextEditorPrivate::updateLineWidgetPosition);
     connect(q, &TextEditor::SCN_ZOOM, q, &TextEditor::zoomValueChanged);
     connect(q, &TextEditor::SCN_DWELLSTART, this, &TextEditorPrivate::onDwellStart);
     connect(q, &TextEditor::SCN_DWELLEND, this, &TextEditorPrivate::onDwellEnd);
     connect(q, &TextEditor::SCN_MODIFIED, this, &TextEditorPrivate::onModified);
+    connect(q, &TextEditor::selectionChanged, &selectionChangeTimer, qOverload<>(&QTimer::start));
+    connect(&selectionChangeTimer, &QTimer::timeout, this, &TextEditorPrivate::onSelectionChanged);
 }
 
 void TextEditorPrivate::initMargins()
@@ -91,13 +97,26 @@ void TextEditorPrivate::initMargins()
     q->setMarginMarkerMask(SymbolMargin,
                            1 << Breakpoint | 1 << BreakpointDisabled
                                    | 1 << Bookmark | 1 << Runtime
-                                   | 1 << RuntimeLineBackground | 1 << CustomLineBackground);
+                                   | 1 << RuntimeLineBackground);
 
     q->markerDefine(TextEditor::RightTriangle, Bookmark);
     q->setMarkerBackgroundColor(QColor(Qt::red), Bookmark);
 
     q->markerDefine(TextEditor::Background, RuntimeLineBackground);
-    q->markerDefine(TextEditor::Background, CustomLineBackground);
+}
+
+void TextEditorPrivate::initWidgetContainer()
+{
+    lineWidgetContainer = new DFloatingWidget(q);
+    lineWidgetContainer->setFramRadius(6);
+    lineWidgetContainer->setVisible(false);
+    QHBoxLayout *layout = new QHBoxLayout(lineWidgetContainer);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSizeConstraint(QLayout::SetFixedSize);
+    lineWidgetContainer->installEventFilter(q);
+
+    if (mainWindow())
+        mainWindow()->installEventFilter(q);
 }
 
 void TextEditorPrivate::updateColorTheme()
@@ -112,7 +131,6 @@ void TextEditorPrivate::updateColorTheme()
     q->markerDefine(rtIcon.pixmap(14, 14), Runtime);
 
     q->setColor(q->palette().color(QPalette::WindowText));
-    auto palette = QToolTip::palette();
     if (DGuiApplicationHelper::instance()->themeType() == DGuiApplicationHelper::DarkType) {
         // editor
         q->setPaper(QColor("#2e2f30"));
@@ -131,9 +149,6 @@ void TextEditorPrivate::updateColorTheme()
         rlbColor.setAlpha(qRound(255 * 0.1));
         q->setMarkerForegroundColor(rlbColor, RuntimeLineBackground);
         q->setMarkerBackgroundColor(rlbColor, RuntimeLineBackground);
-
-        // tooltip
-        palette.setColor(QPalette::Inactive, QPalette::ToolTipText, Qt::lightGray);
     } else {
         // editor
         q->setPaper(QColor("#F8F8F8"));
@@ -152,12 +167,7 @@ void TextEditorPrivate::updateColorTheme()
         rlbColor.setAlpha(qRound(255 * 0.1));
         q->setMarkerForegroundColor(rlbColor, RuntimeLineBackground);
         q->setMarkerBackgroundColor(rlbColor, RuntimeLineBackground);
-
-        // tooltip
-        palette.setColor(QPalette::Inactive, QPalette::ToolTipText, Qt::black);
     }
-
-    QToolTip::setPalette(palette);
 }
 
 void TextEditorPrivate::updateSettings()
@@ -169,7 +179,7 @@ void TextEditorPrivate::updateSettings()
     QFont font(fontName, fontSize, QFont::Normal);
     if (q->lexer())
         q->lexer()->setDefaultFont(font);
-    else
+    else if (!fileName.isEmpty())
         q->setFont(font);
 
     int fontZoom = EditorSettings::instance()->value(Node::FontColor, Group::FontGroup, Key::FontZoom, 100).toInt();
@@ -208,6 +218,17 @@ void TextEditorPrivate::updateSettings()
     q->updateLineNumberWidth(false);
 }
 
+void TextEditorPrivate::onSelectionChanged()
+{
+    if (leftButtonPressed)
+        return;
+
+    int lineFrom = -1, indexFrom = -1, lineTo = -1, indexTo = -1;
+    if (q->hasSelectedText())
+        q->getSelection(&lineFrom, &indexFrom, &lineTo, &indexTo);
+    editor.selectionChanged(fileName, lineFrom, indexFrom, lineTo, indexTo);
+}
+
 void TextEditorPrivate::loadLexer()
 {
     if (fileName.isEmpty())
@@ -215,13 +236,14 @@ void TextEditorPrivate::loadLexer()
 
     using namespace support_file;
     auto id = Language::id(fileName);
+    QFont font(fontName, fontSize, QFont::Normal);
     if (auto lexer = LexerManager::instance()->createSciLexer(id, fileName)) {
         lexer->setParent(q);
-        QFont font(fontName, fontSize, QFont::Normal);
         lexer->setDefaultFont(font);
         q->setLexer(lexer);
         setMarginVisible(FoldingMargin, true);
     } else {
+        q->setFont(font);
         setMarginVisible(FoldingMargin, false);
     }
 }
@@ -341,8 +363,8 @@ void TextEditorPrivate::showMarginMenu()
     DebuggerService *debuggerService = ctx.service<DebuggerService>(DebuggerService::name());
     if (debuggerService->getDebugState() == AbstractDebugger::RunState::kStopped) {
         menu.addSeparator();
-        menu.addAction(tr("jump to %1 line").arg(line + 1), q, [this, line] { editor.jumpToLine(fileName, line + 1); });
-        menu.addAction(tr("run to %1 line").arg(line + 1), q, [this, line] { editor.runToLine(fileName, line + 1); });
+        menu.addAction(tr("jump to %1 line").arg(line + 1), q, [this, line] { editor.jumpToLine(fileName, line); });
+        menu.addAction(tr("run to %1 line").arg(line + 1), q, [this, line] { editor.runToLine(fileName, line); });
     }
 
     // notify other plugin to add action.
@@ -380,39 +402,47 @@ void TextEditorPrivate::gotoPreviousMark(uint mask)
 
 QsciStyle TextEditorPrivate::createAnnotationStyle(int type)
 {
-    QFont font = q->font();
+    QFont font = q->lexer() ? q->lexer()->defaultFont() : q->font();
     font.setItalic(true);
     switch (type) {
-    case AnnotationType::NoteAnnotation: {
-        static QsciStyle style(NOTE_ANNOTATION_STYLE,
-                               "Note",
-                               EditorColor::Table::get()->Black,
-                               EditorColor::Table::get()->Gainsboro,
-                               font);
+    case Edit::TipAnnotation: {
+        QsciStyle style(TIP_ANNOTATION_STYLE,
+                        "Tip",
+                        Qt::gray,
+                        q->lexer() ? q->lexer()->defaultPaper(-1) : q->paper(),
+                        font);
         return style;
     }
-    case AnnotationType::ErrorAnnotation: {
-        static QsciStyle style(ERROR_ANNOTATION_STYLE,
-                               "Error",
-                               EditorColor::Table::get()->FireBrick,
-                               "#fbe8e8",
-                               font);
+    case Edit::NoteAnnotation: {
+        QsciStyle style(NOTE_ANNOTATION_STYLE,
+                        "Note",
+                        EditorColor::Table::get()->Black,
+                        EditorColor::Table::get()->Gainsboro,
+                        font);
         return style;
     }
-    case AnnotationType::FatalAnnotation: {
-        static QsciStyle style(FATAL_ANNOTATION_STYLE,
-                               "Fatal",
-                               EditorColor::Table::get()->FireBrick,
-                               EditorColor::Table::get()->LightCoral,
-                               font);
+    case Edit::ErrorAnnotation: {
+        QsciStyle style(ERROR_ANNOTATION_STYLE,
+                        "Error",
+                        EditorColor::Table::get()->FireBrick,
+                        "#fbe8e8",
+                        font);
         return style;
     }
-    case AnnotationType::WarningAnnotation:
-        static QsciStyle style(WARNING_ANNOTATION_STYLE,
-                               "Warning",
-                               EditorColor::Table::get()->GoldenRod,
-                               EditorColor::Table::get()->Ivory,
-                               font);
+    case Edit::FatalAnnotation: {
+        QsciStyle style(FATAL_ANNOTATION_STYLE,
+                        "Fatal",
+                        EditorColor::Table::get()->FireBrick,
+                        EditorColor::Table::get()->LightCoral,
+                        font);
+        return style;
+    }
+    case Edit::WarningAnnotation:
+        QsciStyle style(WARNING_ANNOTATION_STYLE,
+                        "Warning",
+                        EditorColor::Table::get()->GoldenRod,
+                        EditorColor::Table::get()->Ivory,
+                        font);
         return style;
     }
 
@@ -439,7 +469,7 @@ QMap<int, int> TextEditorPrivate::allMarkers()
         if (mask != 0)
             markers.insert(line, mask);
     }
-    
+
     return markers;
 }
 
@@ -449,12 +479,100 @@ void TextEditorPrivate::setMarkers(const QMap<int, int> &maskMap)
     for (auto iter = maskMap.begin(); iter != maskMap.end(); ++iter) {
         if (iter.key() >= totalLine)
             break;
-        
+
         if (iter.value() & (1 << Breakpoint)) {
             q->addBreakpoint(iter.key(), true);
         } else if (iter.value() & (1 << BreakpointDisabled)) {
             q->addBreakpoint(iter.key(), false);
         }
+    }
+}
+
+QWidget *TextEditorPrivate::mainWindow()
+{
+    static QWidget *mw { nullptr };
+    if (mw)
+        return mw;
+
+    for (auto w : qApp->allWidgets()) {
+        if (w->objectName() == "MainWindow") {
+            mw = w;
+            break;
+        }
+    }
+
+    return mw;
+}
+
+void TextEditorPrivate::setContainerWidget(QWidget *widget)
+{
+    auto layout = lineWidgetContainer->layout();
+    while (auto item = layout->takeAt(0)) {
+        if (QWidget *w = item->widget())
+            w->setVisible(false);
+        delete item;
+    }
+
+    widget->setVisible(true);
+    lineWidgetContainer->setFocusProxy(widget);
+    layout->addWidget(widget);
+    lineWidgetContainer->show();
+    updateLineWidgetPosition();
+}
+
+void TextEditorPrivate::updateLineWidgetPosition()
+{
+    if (!lineWidgetContainer->isVisible() || showAtLine < 0 || showAtLine > q->lines() - 1)
+        return;
+
+    // Use annotations for placeholder
+    q->clearAnnotations(showAtLine);
+    auto lineHeight = q->textHeight(showAtLine);
+    auto padding = lineWidgetContainer->height() / lineHeight;
+    q->annotate(showAtLine - 1, QString(padding, '\n'), 1);
+
+    int pos = q->positionFromLineIndex(showAtLine, 0);
+    auto point = q->pointFromPosition(pos);
+    auto displayY = point.y() - lineWidgetContainer->height();
+
+    lineWidgetContainer->move(point.x(), displayY);
+}
+
+void TextEditorPrivate::updateCacheInfo(int pos, int added)
+{
+    int line = 0, index = 0;
+    q->lineIndexFromPosition(pos, &line, &index);
+    editor.lineChanged(fileName, line, added);
+    if (lineWidgetContainer->isVisible()) {
+        if (showAtLine > line) {
+            showAtLine += added;
+            updateLineWidgetPosition();
+        }
+    }
+
+    if (cpCache.first != -1 && cpCache.first >= line) {
+        const auto &eolStr = q->eolAnnotation(cpCache.first);
+        if (eolStr.isEmpty() || !cpCache.second.contains(eolStr))
+            cpCache.first += added;
+    }
+
+    // update eolannotation line
+    for (auto it = eOLAnnotationRecords.begin(); it != eOLAnnotationRecords.end(); ++it) {
+        if (it.value() >= line)
+            it.value() += added;
+    }
+
+    auto iter = markerCache.begin();
+    for (; iter != markerCache.end(); ++iter) {
+        auto &range = iter.value();
+        if (range.endLine < line)
+            continue;
+        else if (range.startLine > line)
+            range.startLine += added;
+
+        range.endLine += added;
+        if (added > 0)
+            q->setRangeBackgroundColor(range.startLine, range.endLine, iter.key());
     }
 }
 
@@ -504,12 +622,9 @@ void TextEditorPrivate::onModified(int pos, int mtype, const QString &text, int 
     contentsChanged = true;
     if (isAutoCompletionEnabled && !text.isEmpty())
         editor.textChanged();
-    
-    if (added != 0) {
-        int line = 0, index = 0;
-        q->lineIndexFromPosition(pos, &line, &index);
-        editor.lineChanged(fileName, line + 1, added);
-    }
+
+    if (added != 0)
+        updateCacheInfo(pos, added);
 
     if (mtype & TextEditor::SC_MOD_INSERTTEXT) {
         emit q->textAdded(pos, len, added, text, line);

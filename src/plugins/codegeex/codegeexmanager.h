@@ -10,10 +10,7 @@
 
 #include <QObject>
 #include <QMap>
-
-QT_BEGIN_NAMESPACE
-class QTimer;
-QT_END_NAMESPACE
+#include <QTimer>
 
 struct RecordData
 {
@@ -28,6 +25,11 @@ static const char *chatModelPro = "codegeex-chat-pro";
 
 static const char *completionModelLite = "codegeex-lite";
 static const char *completionModelPro = "codegeex-pro";
+
+#if defined(__x86_64__) || defined(__arm__)
+#define SUPPORTMINIFORGE
+#endif
+
 
 enum languageModel {
     Lite,
@@ -51,6 +53,8 @@ public:
 
     Q_INVOKABLE void login();
     bool isLoggedIn() const;
+    void checkCondaInstalled();
+    bool condaHasInstalled();
 
     void saveConfig(const QString &sessionId, const QString &userId);
     void loadConfig();
@@ -79,9 +83,24 @@ public:
     QList<RecordData> sessionRecords() const;
 
     void connectToNetWork(bool connecting);
-    bool isConnectToNetWork() { return isConnecting; };
-    QStringList getReferenceFiles() { return referenceFiles; };
-    void setRefereceFiles(QStringList files) { referenceFiles = files; };
+    bool isConnectToNetWork() const;
+    QStringList getReferenceFiles() const;
+    void setReferenceCodebase(bool on);
+    bool isReferenceCodebase() const;
+    void setReferenceFiles(const QStringList &files);
+
+    // Rag
+    QString condaRootPath() const;
+    void showIndexingWidget();
+    Q_INVOKABLE void installConda();
+    void generateRag(const QString &projectPath);
+    /*
+     JsonObject:
+        Query: str
+        Chunks: Arr[fileName:str, content:str, similarity:float]
+        Instructions: obj{name:str, description:str, content:str}
+     */
+    QJsonObject query(const QString &projectPath, const QString &query, int topItems);
 
 Q_SIGNALS:
     void loginSuccessed();
@@ -97,6 +116,10 @@ Q_SIGNALS:
     void sessionRecordsUpdated();
     void setTextToSend(const QString &prompt);
     void requestStop();
+    void notify(int type, const QString &message);
+    void showCustomWidget(QWidget *widget);
+    void generateDone(const QString &path, bool failed);
+    void quit();
 
 public Q_SLOTS:
     void onSessionCreated(const QString &talkId, bool isSuccessful);
@@ -131,8 +154,9 @@ private:
     QTimer *queryTimer { nullptr };
     bool isLogin { false };
     bool isRunning { false };
-    bool isConnecting { false };
-    QStringList referenceFiles;
+    bool condaInstalled { false };
+    QTimer installCondaTimer;
+    QStringList indexingProject {};
 };
 
 #endif   // CODEGEEXMANAGER_H

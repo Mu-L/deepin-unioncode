@@ -15,6 +15,8 @@ namespace dpfservice {
 class EditorService;
 }
 
+class InlineChatWidget;
+class Command;
 class Copilot : public QObject
 {
     Q_OBJECT
@@ -26,10 +28,13 @@ public:
     void replaceSelectedText(const QString &text);
     void insterText(const QString &text);
     void setGenerateCodeEnabled(bool enabled);
+    bool getGenerateCodeEnabled() const;
     void setLocale(const QString &locale);
     void setCommitsLocale(const QString &locale);
     void setCurrentModel(CodeGeeX::languageModel model);
     void handleTextChanged();
+    void handleSelectionChanged(const QString &fileName, int lineFrom, int indexFrom,
+                                int lineTo, int indexTo);
 
 signals:
     // the code will be tranlated.
@@ -59,12 +64,22 @@ private:
     void switchToCodegeexPage();
     bool responseValid(const QString &response);
     QString assembleCodeByCurrentFile(const QString &code);
+    void showLineChatTip(const QString &fileName, int line);
+    void startInlineChat();
 
+    InlineChatWidget *inlineChatWidget = nullptr;
+    Command *lineChatCmd = nullptr;
     CodeGeeX::CopilotApi copilotApi;
     dpfservice::EditorService *editorService = nullptr;
-    QString generateResponse;
-    QMutex mutexResponse;
-    bool generateCodeEnabled = true;
+    QTimer *generateTimer = nullptr;
+    QStringList generateCache {};
+    QString generatedCode {};
+    QString extractSingleLine();
+
+    CodeGeeX::CopilotApi::GenerateType generateType;
+    CodeGeeX::CopilotApi::GenerateType checkPrefixType(const QString &prefixCode);
+
+    QAtomicInteger<bool> generateCodeEnabled = true;
 };
 
 #endif   // COPILOT_H

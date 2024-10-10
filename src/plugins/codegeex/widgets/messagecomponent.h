@@ -37,6 +37,7 @@ public:
     void updateMessage(const MessageData &msgData);
     void waitForAnswer();
     void stopWaiting();
+    void setCustomWidget(QWidget *widget);
 
 private:
     void initUI();
@@ -56,8 +57,7 @@ private:
     DLabel *senderName { nullptr };
     DLabel *context { nullptr };
     DPushButton *editButton { nullptr };
-    DSpinner *spinner { nullptr };
-    DLabel *searchingText { nullptr };
+    DWidget *searchingWidget { nullptr };
 
     QVBoxLayout *msgLayout { nullptr };
 

@@ -30,8 +30,9 @@ void MenuManager::initialize(WindowService *windowService)
                           QKeySequence key, const QString &iconName = {}) -> Command * {
         action->setIcon(QIcon::fromTheme(iconName));
         auto cmd = ActionManager::instance()->registerAction(action, id);
-        cmd->setDefaultKeySequence(key);
         cmd->setDescription(description);
+        if (!key.isEmpty())
+            cmd->setDefaultKeySequence(key);
         return cmd;
     };
 
@@ -117,6 +118,24 @@ void MenuManager::initialize(WindowService *windowService)
     mDebug->addAction(actionImpl);
     appOutPutPane->registerItemToToolBar(debugToolBarName, actionImpl->action(), false);
 
+    stepBack.reset(new QAction(MWMDA_STEP_BACK));
+    stepBack->setEnabled(false);
+    connect(stepBack.get(), &QAction::triggered, debugManager, &DebugManager::stepBack);
+    actionImpl = initAction(stepBack.get(), "Debug.Step.Back",
+                            MWMDA_STEP_BACK, QKeySequence(),
+                            "debugger_stepback");
+    mDebug->addAction(actionImpl);
+    appOutPutPane->registerItemToToolBar(debugToolBarName, actionImpl->action(), false);
+
+    reverseContinue.reset(new QAction(MWMDA_REVERSE_CONTINUE));
+    reverseContinue->setEnabled(false);
+    connect(reverseContinue.get(), &QAction::triggered, debugManager, &DebugManager::reverseContinue);
+    actionImpl = initAction(reverseContinue.get(), "Debug.Reverse.Continue",
+                            MWMDA_REVERSE_CONTINUE, QKeySequence(),
+                            "debugger_reverse_continue");
+    mDebug->addAction(actionImpl);
+    appOutPutPane->registerItemToToolBar(debugToolBarName, actionImpl->action(), false);
+
     remoteDebug.reset(new QAction(MWMDA_REMOTE_DEBUG));
     connect(remoteDebug.get(), &QAction::triggered, debugManager, [=]() {
         auto remoteDlg = new RemoteDebugDlg();
@@ -153,6 +172,8 @@ void MenuManager::handleRunStateChanged(AbstractDebugger::RunState state)
         stepOver->setEnabled(false);
         stepIn->setEnabled(false);
         stepOut->setEnabled(false);
+        stepBack->setEnabled(false);
+        reverseContinue->setEnabled(false);
         attachDebugging->setEnabled(true);
         break;
 
@@ -168,6 +189,8 @@ void MenuManager::handleRunStateChanged(AbstractDebugger::RunState state)
         stepOver->setEnabled(false);
         stepIn->setEnabled(false);
         stepOut->setEnabled(false);
+        stepBack->setEnabled(false);
+        reverseContinue->setEnabled(false);
         attachDebugging->setEnabled(false);
         break;
     case AbstractDebugger::kStopped:
@@ -182,6 +205,8 @@ void MenuManager::handleRunStateChanged(AbstractDebugger::RunState state)
         stepOver->setEnabled(true);
         stepIn->setEnabled(true);
         stepOut->setEnabled(true);
+        stepBack->setEnabled(true & debugManager->supportStepBack());
+        reverseContinue->setEnabled(true & debugManager->supportStepBack());
         attachDebugging->setEnabled(false);
         break;
     case AbstractDebugger::kCustomRunning:
@@ -193,6 +218,8 @@ void MenuManager::handleRunStateChanged(AbstractDebugger::RunState state)
         stepOver->setEnabled(false);
         stepIn->setEnabled(false);
         stepOut->setEnabled(false);
+        stepBack->setEnabled(false);
+        reverseContinue->setEnabled(false);
         attachDebugging->setEnabled(false);
         break;
 

@@ -117,38 +117,38 @@ void CodeEditor::initActions()
 
     QAction *backAction = new QAction(tr("Backward"), this);
     connect(backAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqBack);
-    auto cmd = EditorUtils::registerShortcut(backAction, "Editor.back", QKeySequence(Qt::ALT | Qt::Key_Left));
+    auto cmd = EditorUtils::registerShortcut(backAction, "TextEditor.back", QKeySequence(Qt::ALT | Qt::Key_Left));
     mEdit->addAction(cmd);
 
     QAction *forwardAction = new QAction(tr("Forward"), this);
     connect(forwardAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqForward);
-    cmd = EditorUtils::registerShortcut(forwardAction, "Editor.forward", QKeySequence(Qt::ALT | Qt::Key_Right));
+    cmd = EditorUtils::registerShortcut(forwardAction, "TextEditor.forward", QKeySequence(Qt::ALT | Qt::Key_Right));
     mEdit->addAction(cmd);
 
     QAction *closeAction = new QAction(tr("Close Current Editor"), this);
     connect(closeAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqCloseCurrentEditor);
-    cmd = EditorUtils::registerShortcut(closeAction, "Editor.close", QKeySequence(Qt::CTRL | Qt::Key_W));
+    cmd = EditorUtils::registerShortcut(closeAction, "TextEditor.close", QKeySequence(Qt::CTRL | Qt::Key_W));
     mEdit->addAction(cmd, G_EDIT_OTHER);
 
     QAction *switchHeaderSourceAction = new QAction(tr("Switch Header/Source"), this);
     connect(switchHeaderSourceAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqSwitchHeaderSource);
-    EditorUtils::registerShortcut(switchHeaderSourceAction, "Editor.switchHS", QKeySequence(Qt::Key_F4));
+    EditorUtils::registerShortcut(switchHeaderSourceAction, "TextEditor.switchHS", QKeySequence(Qt::Key_F4));
 
     QAction *follSymbolAction = new QAction(tr("Follow Symbol Under Cursor"), this);
     connect(follSymbolAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqFollowSymbolUnderCursor);
-    EditorUtils::registerShortcut(follSymbolAction, "Editor.followSymbol", QKeySequence(Qt::Key_F2));
+    EditorUtils::registerShortcut(follSymbolAction, "TextEditor.followSymbol", QKeySequence(Qt::Key_F2));
 
     QAction *toggleBreakpointAction = new QAction(tr("Toggle Breakpoint"), this);
     connect(toggleBreakpointAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqToggleBreakpoint);
-    EditorUtils::registerShortcut(toggleBreakpointAction, "Editor.toggleBreak", QKeySequence(Qt::Key_F9));
+    EditorUtils::registerShortcut(toggleBreakpointAction, "TextEditor.toggleBreak", QKeySequence(Qt::Key_F9));
 
     QAction *findUsageAction = new QAction(tr("Find Usages"), this);
     connect(findUsageAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqFindUsage);
-    EditorUtils::registerShortcut(findUsageAction, "Editor.findUsage", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
+    EditorUtils::registerShortcut(findUsageAction, "TextEditor.findUsage", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
 
     QAction *renameAction = new QAction(tr("Rename Symbol Under Cursor"), this);
     connect(renameAction, &QAction::triggered, EditorCallProxy::instance(), &EditorCallProxy::reqRenameSymbol);
-    EditorUtils::registerShortcut(renameAction, "Editor.rename", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+    EditorUtils::registerShortcut(renameAction, "TextEditor.rename", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
 }
 
 void CodeEditor::initEditorService()
@@ -171,7 +171,7 @@ void CodeEditor::initEditorService()
     editorService->undo = std::bind(&WorkspaceWidget::undo, workspaceWidget);
     editorService->modifiedFiles = std::bind(&WorkspaceWidget::modifiedFiles, workspaceWidget);
     editorService->saveAll = std::bind(&WorkspaceWidget::saveAll, workspaceWidget);
-    editorService->setCompletion = std::bind(&WorkspaceWidget::setCompletion, workspaceWidget, _1, _2, _3);
+    editorService->setCompletion = std::bind(&WorkspaceWidget::setCompletion, workspaceWidget, _1);
     editorService->currentFile = std::bind(&WorkspaceWidget::currentFile, workspaceWidget);
     editorService->setText = std::bind(&WorkspaceWidget::setText, workspaceWidget, _1);
     editorService->registerWidget = std::bind(&WorkspaceWidget::registerWidget, workspaceWidget, _1, _2);
@@ -180,7 +180,27 @@ void CodeEditor::initEditorService()
     editorService->openedFiles = std::bind(&WorkspaceWidget::openedFiles, workspaceWidget);
     editorService->fileText = std::bind(&WorkspaceWidget::fileText, workspaceWidget, _1);
     editorService->replaceAll = std::bind(&WorkspaceWidget::replaceAll, workspaceWidget, _1, _2, _3, _4, _5);
-    editorService->replaceRange = std::bind(&WorkspaceWidget::replaceRange, workspaceWidget, _1, _2, _3, _4, _5);
+    editorService->replaceText = std::bind(&WorkspaceWidget::replaceText, workspaceWidget, _1, _2, _3, _4, _5);
+    editorService->replaceRange = std::bind(&WorkspaceWidget::replaceRange, workspaceWidget, _1, _2, _3);
+    editorService->backgroundMarkerDefine = std::bind(&WorkspaceWidget::backgroundMarkerDefine, workspaceWidget, _1, _2, _3);
+    editorService->setRangeBackgroundColor = std::bind(&WorkspaceWidget::setRangeBackgroundColor, workspaceWidget, _1, _2, _3, _4);
+    editorService->getBackgroundRange = std::bind(&WorkspaceWidget::getBackgroundRange, workspaceWidget, _1, _2);
+    editorService->clearAllBackgroundColor = std::bind(&WorkspaceWidget::clearAllBackgroundColor, workspaceWidget, _1, _2);
+    editorService->showLineWidget = std::bind(&WorkspaceWidget::showLineWidget, workspaceWidget, _1, _2);
+    editorService->closeLineWidget = std::bind(&WorkspaceWidget::closeLineWidget, workspaceWidget);
+    editorService->cursorPosition = std::bind(&WorkspaceWidget::cursorPosition, workspaceWidget);
+    editorService->registerDiagnosticRepairTool = std::bind(&WorkspaceWidget::registerDiagnosticRepairTool, workspaceWidget, _1, _2);
+    editorService->getDiagnosticRepairTool = std::bind(&WorkspaceWidget::getDiagnosticRepairTool, workspaceWidget);
+    editorService->lineText = std::bind(&WorkspaceWidget::lineText, workspaceWidget, _1, _2);
+    editorService->eOLAnnotate = std::bind(&WorkspaceWidget::eOLAnnotate, workspaceWidget, _1, _2, _3, _4, _5);
+    editorService->clearEOLAnnotation = std::bind(&WorkspaceWidget::clearEOLAnnotation, workspaceWidget, _1, _2);
+    editorService->clearAllEOLAnnotation = std::bind(&WorkspaceWidget::clearAllEOLAnnotation, workspaceWidget, _1);
+    editorService->annotate = std::bind(&WorkspaceWidget::annotate, workspaceWidget, _1, _2, _3, _4, _5);
+    editorService->clearAnnotation = std::bind(&WorkspaceWidget::clearAnnotation, workspaceWidget, _1, _2);
+    editorService->clearAllAnnotation = std::bind(&WorkspaceWidget::clearAllAnnotation, workspaceWidget, _1);
+    editorService->rangeText = std::bind(&WorkspaceWidget::rangeText, workspaceWidget, _1, _2);
+    editorService->selectionRange = std::bind(&WorkspaceWidget::selectionRange, workspaceWidget, _1);
+    editorService->codeRange = std::bind(&WorkspaceWidget::codeRange, workspaceWidget, _1, _2);
 
     LexerManager::instance()->init(editorService);
 }

@@ -6,14 +6,17 @@
 #include "private/texteditor_p.h"
 #include "utils/editorutils.h"
 #include "common/common.h"
+#include "common/tooltip/tooltip.h"
 #include "settings/settingsdefine.h"
 
+#include "services/editor/editor_define.h"
+
 #include "Qsci/qscidocument.h"
+#include "Qsci/qscilexer.h"
 
 #include <DDialog>
 
 #include <QFile>
-#include <QToolTip>
 #include <QScrollBar>
 #include <QFileDialog>
 #include <QApplication>
@@ -163,7 +166,7 @@ void TextEditor::addBreakpoint(int line, bool enabled)
         markerAdd(line, TextEditorPrivate::BreakpointDisabled);
     }
 
-    editor.breakpointAdded(d->fileName, line + 1, enabled);
+    editor.breakpointAdded(d->fileName, line, enabled);
 }
 
 void TextEditor::removeBreakpoint(int line)
@@ -173,7 +176,7 @@ void TextEditor::removeBreakpoint(int line)
     else
         markerDelete(line, TextEditorPrivate::BreakpointDisabled);
 
-    editor.breakpointRemoved(d->fileName, line + 1);
+    editor.breakpointRemoved(d->fileName, line);
 }
 
 void TextEditor::toggleBreakpoint()
@@ -198,12 +201,12 @@ void TextEditor::setBreakpointEnabled(int line, bool enabled)
         markerDelete(line, TextEditorPrivate::Breakpoint);
         markerAdd(line, TextEditorPrivate::BreakpointDisabled);
     }
-    editor.breakpointStatusChanged(d->fileName, line + 1, enabled);
+    editor.breakpointStatusChanged(d->fileName, line, enabled);
 }
 
 void TextEditor::setBreakpointCondition(int line)
 {
-    editor.setBreakpointCondition(d->fileName, line + 1);
+    editor.setBreakpointCondition(d->fileName, line);
 }
 
 bool TextEditor::breakpointEnabled(int line)
@@ -329,20 +332,42 @@ int TextEditor::cursorPosition()
     return static_cast<int>(SendScintilla(TextEditor::SCI_GETCURRENTPOS));
 }
 
-void TextEditor::setLineBackgroundColor(int line, const QColor &color)
+int TextEditor::backgroundMarkerDefine(const QColor &color, int defaultMarker)
 {
-    markerAdd(line, TextEditorPrivate::CustomLineBackground);
-    setMarkerBackgroundColor(color, TextEditorPrivate::CustomLineBackground);
+    int marker = markerDefine(Background, defaultMarker);
+    setMarkerBackgroundColor(color, marker);
+    return marker;
 }
 
-void TextEditor::resetLineBackgroundColor(int line)
+void TextEditor::setRangeBackgroundColor(int startLine, int endLine, int marker)
 {
-    markerDelete(line, TextEditorPrivate::CustomLineBackground);
+    startLine = qMax(startLine, 0);
+    endLine = qMin(endLine, lines() - 1);
+    if (startLine > endLine)
+        return;
+
+    d->markerCache.insert(marker, { startLine, endLine });
+    for (; startLine <= endLine; ++startLine) {
+        markerAdd(startLine, marker);
+    }
 }
 
-void TextEditor::clearLineBackgroundColor()
+void TextEditor::getBackgroundRange(int marker, int *startLine, int *endLine)
 {
-    markerDeleteAll(TextEditorPrivate::CustomLineBackground);
+    if (!d->markerCache.contains(marker))
+        return;
+
+    if (!startLine || !endLine)
+        return;
+
+    *startLine = d->markerCache[marker].startLine;
+    *endLine = d->markerCache[marker].endLine;
+}
+
+void TextEditor::clearAllBackgroundColor(int marker)
+{
+    d->markerCache.remove(marker);
+    markerDeleteAll(marker);
 }
 
 void TextEditor::showTips(const QString &tips)
@@ -361,28 +386,44 @@ void TextEditor::showTips(int pos, const QString &tips)
         return;
 
     auto point = pointFromPosition(pos);
-    QToolTip::showText(mapToGlobal(point), tips, this);
+    ToolTip::show(mapToGlobal(point), tips, this);
+}
+
+void TextEditor::showTips(int pos, QWidget *w)
+{
+    if (!hasFocus() || !d->tipsDisplayable)
+        return;
+
+    bool isCtrlPressed = qApp->queryKeyboardModifiers().testFlag(Qt::ControlModifier);
+    if (isCtrlPressed)
+        return;
+
+    auto point = pointFromPosition(pos);
+    ToolTip::show(mapToGlobal(point), w, this);
 }
 
 void TextEditor::cancelTips()
 {
-    QToolTip::hideText();
+    ToolTip::hideImmediately();
 }
 
 void TextEditor::addAnnotation(const QString &title, const QString &content, int line, int type)
 {
     QString typeStr;
     switch (type) {
-    case AnnotationType::NoteAnnotation:
+    case dpfservice::Edit::TipAnnotation:
+        typeStr = "Tip";
+        break;
+    case dpfservice::Edit::NoteAnnotation:
         typeStr = "Note";
         break;
-    case AnnotationType::ErrorAnnotation:
+    case dpfservice::Edit::ErrorAnnotation:
         typeStr = "Error";
         break;
-    case AnnotationType::FatalAnnotation:
+    case dpfservice::Edit::FatalAnnotation:
         typeStr = "Fatal";
         break;
-    case AnnotationType::WarningAnnotation:
+    case dpfservice::Edit::WarningAnnotation:
         typeStr = "Warning";
         break;
     }
@@ -409,6 +450,25 @@ void TextEditor::removeAnnotation(const QString &title)
 
     for (int line : lineList)
         clearAnnotations(line);
+}
+
+void TextEditor::addEOLAnnotation(const QString &title, const QString &content, int line, int type)
+{
+    d->eOLAnnotationRecords.insertMulti(title, line);
+    auto style = d->createAnnotationStyle(type);
+    eOLAnnotate(line, content, style);
+}
+
+void TextEditor::removeEOLAnnotation(const QString &title)
+{
+    if (!d->eOLAnnotationRecords.contains(title))
+        return;
+
+    auto lineList = d->eOLAnnotationRecords.values(title);
+    d->eOLAnnotationRecords.remove(title);
+
+    for (int line : lineList)
+        clearEOLAnnotations(line);
 }
 
 void TextEditor::commentOperation()
@@ -656,12 +716,47 @@ void TextEditor::renameSymbol()
     d->languageClient->renameActionTriggered();
 }
 
-void TextEditor::setCompletion(const QString &info, const QIcon &icon, const QKeySequence &key)
+void TextEditor::setCompletion(const QString &info)
 {
-    if (!d->completionWidget)
+    if (info.isEmpty())
         return;
 
-    d->completionWidget->setCompletion(info, icon, key);
+    int line = -1, index = -1;
+    getCursorPosition(&line, &index);
+    int lineEndPos = SendScintilla(SCI_GETLINEENDPOSITION, line);
+    if (lineEndPos != cursorPosition())
+        return;
+
+    cancelCompletion();
+    d->cpCache = qMakePair(line, info);
+    const auto &part1 = info.mid(0, info.indexOf('\n'));
+    const auto &part2 = info.mid(info.indexOf('\n') + 1);
+    QsciStyle cpStyle(1, "", Qt::gray, lexer() ? lexer()->defaultPaper(-1) : paper(),
+                      lexer() ? lexer()->defaultFont() : font());
+    eOLAnnotate(line, part1, cpStyle);
+    if (part1 != part2)
+        annotate(line, part2, cpStyle);
+}
+
+void TextEditor::applyCompletion()
+{
+    if (d->cpCache.first == -1)
+        return;
+
+    const auto cpStr = d->cpCache.second;
+    cancelCompletion();
+    insertText(cpStr);
+}
+
+void TextEditor::cancelCompletion()
+{
+    if (d->cpCache.first == -1)
+        return;
+
+    clearEOLAnnotations(d->cpCache.first);
+    clearAnnotations(d->cpCache.first);
+
+    d->cpCache = qMakePair(-1, QString());
 }
 
 QString TextEditor::cursorBeforeText() const
@@ -684,6 +779,28 @@ void TextEditor::setAutomaticInvocationEnabled(bool enabled)
 bool TextEditor::isAutomaticInvocationEnabled() const
 {
     return d->isAutoCompletionEnabled;
+}
+
+bool TextEditor::showLineWidget(int line, QWidget *widget)
+{
+    if (line == 0)
+        line += 1;
+
+    if (line < 0 || line >= lines() || !hasFocus())
+        return false;
+
+    if (d->lineWidgetContainer->isVisible())
+        closeLineWidget();
+
+    d->showAtLine = line;
+    d->setContainerWidget(widget);
+    return true;
+}
+
+void TextEditor::closeLineWidget()
+{
+    d->lineWidgetContainer->setVisible(false);
+    clearAnnotations(d->showAtLine - 1);
 }
 
 void TextEditor::onMarginClicked(int margin, int line, Qt::KeyboardModifiers state)
@@ -747,6 +864,7 @@ void TextEditor::onCursorPositionChanged(int line, int index)
 {
     Q_UNUSED(line)
 
+    cancelCompletion();
     editor.cursorPositionChanged(d->fileName, line, index);
     int pos = positionFromLineIndex(line, index);
 
@@ -762,6 +880,10 @@ void TextEditor::onCursorPositionChanged(int line, int index)
 
 void TextEditor::focusOutEvent(QFocusEvent *event)
 {
+    if (!d->lineWidgetContainer->hasFocus())
+        closeLineWidget();
+
+    cancelCompletion();
     Q_EMIT focusOut();
     Q_EMIT followTypeEnd();
     QsciScintilla::focusOutEvent(event);
@@ -769,8 +891,14 @@ void TextEditor::focusOutEvent(QFocusEvent *event)
 
 void TextEditor::keyPressEvent(QKeyEvent *event)
 {
+    if (event->key() == Qt::Key_Tab && d->cpCache.first != -1)
+        return applyCompletion();
+
     if (d->completionWidget->processKeyPressEvent(event))
         return;
+
+    if (event->key() == Qt::Key_Escape && d->cpCache.first != -1)
+        return cancelCompletion();
 
     QsciScintilla::keyPressEvent(event);
 }
@@ -785,6 +913,33 @@ void TextEditor::mouseMoveEvent(QMouseEvent *event)
     }
 
     QsciScintilla::mouseMoveEvent(event);
+}
+
+void TextEditor::mousePressEvent(QMouseEvent *event)
+{
+    if (event->buttons().testFlag(Qt::LeftButton))
+        d->leftButtonPressed = true;
+
+    QsciScintilla::mousePressEvent(event);
+}
+
+void TextEditor::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (!event->buttons().testFlag(Qt::LeftButton))
+        d->leftButtonPressed = false;
+
+    QsciScintilla::mouseReleaseEvent(event);
+}
+
+bool TextEditor::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == d->lineWidgetContainer && event->type() == QEvent::Resize) {
+        d->updateLineWidgetPosition();
+    } else if (obj == d->mainWindow() && event->type() == QEvent::Move) {
+        d->updateLineWidgetPosition();
+    }
+
+    return QsciScintilla::eventFilter(obj, event);
 }
 
 bool TextEditor::event(QEvent *event)
